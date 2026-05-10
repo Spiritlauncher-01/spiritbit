@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include "vmlinux.h"
+#define bpf_stream_vprintk bpf_stream_vprintk__unused
 #include <bpf/bpf_helpers.h>
+#undef bpf_stream_vprintk
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
