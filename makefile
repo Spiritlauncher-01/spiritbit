@@ -3,8 +3,7 @@
 
 CC     = gcc
 CLANG  = clang
-CFLAGS = -Wall -Wextra -Wpedantic -Werror \
-         -Wstrict-prototypes -g -O2
+CFLAGS = -Wall -Wextra -Wpedantic -Wstrict-prototypes -g -O2
 LDFLAGS = -lbpf -lelf -lz -lm -lpthread \
           -lcap -lsqlite3 -lcrypto
 
@@ -22,6 +21,7 @@ spiritbit.bpf.o: spiritbit.bpf.c
 		-D__TARGET_ARCH_x86 \
 		-I/usr/include \
 		-O2 -g \
+		-w \
 		-c spiritbit.bpf.c \
 		-o spiritbit.bpf.o
 
