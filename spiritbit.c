@@ -2552,7 +2552,7 @@ int main(int argc, char **argv)
         bpf_map__fd(events_map),
         handle_event,        // called for each event
         handle_lost_events,  // called when events dropped
-        NULL, NULL
+        NULL
     );
     if (!rb) {
         fprintf(stderr,
@@ -2570,7 +2570,7 @@ int main(int argc, char **argv)
             bpf_map__fd(rate_map),
             handle_rate_event,
             handle_rate_alert,
-            NULL, NULL
+            NULL
         );
     }
 
