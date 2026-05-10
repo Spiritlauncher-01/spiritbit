@@ -5,20 +5,34 @@
 
 // Core eBPF definitions
 // Helper functions, map types, program types
-#include <linux/bpf.h>
 
 // Kernel process definitions
 // task_struct, sched.h gives us process info
-#include <linux/sched.h>
+#include "vmlinux"
 
 // eBPF helper macros
 // SEC macro for section placement
 // BPF_MAP_TYPE definitions
+#define bpf_stream_vprintk bpf_stream_vprintk__unused
 #include <bpf/bpf_helpers.h>
+#undef bpf_stream_vprintk
 
 // Tracing helpers
 // For reading syscall arguments safely
 #include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
+#ifndef PTRACE_ATTACH
+#define PTRACE_ATTACH 16
+#endif
+
+#ifndef PTRACE_POKEDATA
+#define PTRACE_POKEDATA 5
+#endif
+
+#ifndef PTRACE_PEEKDATA
+#define PTRACE_PEEKDATA 2
+#endif
 
 // Version field in event struct
 // Kernel and userspace must agree on this
@@ -115,6 +129,49 @@ struct {
     __type(key, u64);                   // pid_tgid key
     __type(value, struct pending_open);
 } pending SEC(".maps");
+
+SEC("tracepoint/syscalls/sys_enter_openat")
+int handle_openat_entry(struct trace_event_raw_sys_enter *ctx)
+{
+    u64 key = bpf_get_current_pid_tgid();
+
+    // Use scratch map instead of stack
+    // Avoids 512 byte stack limit
+    int zero = 0;
+    char *filename = bpf_map_lookup_elem(
+        &scratch_filename, &zero
+    );
+    if (!filename) return 0;
+
+    int bytes_read = bpf_probe_read_user_str(
+        filename,
+        256,
+        (void *)ctx->args[1]
+    );
+
+    if (bytes_read <= 0) return 0;
+    if (!is_sensitive_path(filename)) return 0;
+    if (is_flooding(key)) return 0;
+
+    // Get scratch pending struct
+    struct pending_open *p = bpf_map_lookup_elem(
+        &scratch_pending, &zero
+    );
+    if (!p) return 0;
+
+    // Clear it first
+    __builtin_memset(p, 0, sizeof(*p));
+
+    p->pid = key >> 32;
+    p->timestamp = bpf_ktime_get_ns();
+    p->open_flags = (u32)ctx->args[2];
+    p->truncated = (bytes_read == 256) ? 1 : 0;
+    __builtin_memcpy(p->filename, filename, 256);
+
+    bpf_map_update_elem(&pending, &key, p, BPF_ANY);
+
+    return 0;
+}
 
 // Rate alert struct
 // Sent when process exceeds rate limit
