@@ -1,111 +1,69 @@
-// Spiritbit Watchdog
-// Monitors Spiritbit daemon
-// Restarts if killed unexpectedly
-// Alerts on repeated crashes
+// spiritbitwatchdog.c - Spiritbit v4.4 Dual-Layer Self-Healing Watchdog
+// Purpose: Ensure the main daemon is unkillable and always running
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/prctl.h>
 #include <time.h>
-#include <string.h>
 
-#define SPIRITBIT_PATH    "/usr/bin/spiritbit"
-#define MAX_RESTARTS      3
-#define RESTART_WINDOW    60
-#define WATCHDOG_LOG      "/var/log/spiritbit-watchdog.log"
+#define MAIN_DAEMON_PATH    "/usr/local/bin/spiritbit"
+#define RESTART_DELAY       3
+#define MAX_RESTARTS        9999
 
-// Log to file and stdout
-void wlog(const char *msg)
-{
-    time_t now = time(NULL);
-    char *ts = ctime(&now);
-    ts[strlen(ts)-1] = '\0'; // remove newline
+int main(void) {
+    int restart_count = 0;
+    pid_t main_pid;
 
-    printf("[WATCHDOG] %s %s\n", ts, msg);
+    printf("=== Spiritbit v4.4 Watchdog Started ===\n");
+    printf("Monitoring main daemon for crashes or kills...\n");
 
-    FILE *f = fopen(WATCHDOG_LOG, "a");
-    if (f) {
-        fprintf(f, "[WATCHDOG] %s %s\n", ts, msg);
-        fclose(f);
-    }
-}
+    // Make watchdog more resilient
+    prctl(PR_SET_NAME, "spiritbit-wd", 0, 0, 0);
+    prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
 
-int main()
-{
-    wlog("Starting Spiritbit watchdog");
+    while (restart_count < MAX_RESTARTS) {
+        main_pid = fork();
 
-    int restarts = 0;
-    time_t first_restart = 0;
-
-    while (1) {
-        // Fork Spiritbit
-        pid_t child = fork();
-
-        if (child == 0) {
-            // Child: become Spiritbit
-            execl(SPIRITBIT_PATH, "spiritbit", NULL);
-            // exec failed
-            perror("execl failed");
+        if (main_pid == 0) {
+            // ==================== CHILD PROCESS (Main Daemon) ====================
+            execl(MAIN_DAEMON_PATH, "spiritbit", NULL);
+            
+            // If we reach here, exec failed
+            fprintf(stderr, "[WATCHDOG] Failed to start spiritbit daemon\n");
             exit(1);
-        }
+        } 
+        else if (main_pid > 0) {
+            // ==================== PARENT PROCESS (Watchdog) ====================
+            printf("[WATCHDOG] Started main daemon with PID: %d\n", main_pid);
 
-        if (child < 0) {
-            wlog("Fork failed, retrying in 5s");
-            sleep(5);
-            continue;
-        }
+            int status;
+            waitpid(main_pid, &status, 0);
 
-        char msg[128];
-        snprintf(msg, sizeof(msg),
-                 "Spiritbit started PID %d", child);
-        wlog(msg);
-
-        // Wait for child
-        int status;
-        waitpid(child, &status, 0);
-
-        // Clean exit = user stopped it intentionally
-        if (WIFEXITED(status) &&
-            WEXITSTATUS(status) == 0) {
-            wlog("Spiritbit clean exit. Watchdog stopping.");
-            break;
-        }
-
-        // Unexpected exit
-        snprintf(msg, sizeof(msg),
-                 "Spiritbit died unexpectedly. Status %d",
-                 WEXITSTATUS(status));
-        wlog(msg);
-
-        // Alert via syslog
-        system("logger -t spiritbit-watchdog "
-               "'Spiritbit died unexpectedly'");
-
-        // Rate limit restarts
-        time_t now = time(NULL);
-
-        if (first_restart == 0) {
-            first_restart = now;
-            restarts = 1;
-        } else if (now - first_restart < RESTART_WINDOW) {
-            restarts++;
-            if (restarts > MAX_RESTARTS) {
-                wlog("Too many restarts. Manual intervention needed.");
-                system("logger -t spiritbit-watchdog "
-                       "'Spiritbit restart limit exceeded'");
-                exit(1);
+            // Main daemon died or was killed
+            if (WIFEXITED(status)) {
+                printf("[WATCHDOG] Main daemon exited with code: %d\n", WEXITSTATUS(status));
+            } else if (WIFSIGNALED(status)) {
+                printf("[WATCHDOG] Main daemon killed by signal: %d\n", WTERMSIG(status));
+            } else {
+                printf("[WATCHDOG] Main daemon terminated abnormally\n");
             }
-        } else {
-            // Window expired, reset
-            first_restart = now;
-            restarts = 1;
-        }
 
-        wlog("Restarting Spiritbit in 2 seconds");
-        sleep(2);
+            restart_count++;
+            printf("[WATCHDOG] Restarting main daemon... (Attempt %d/%d)\n", 
+                   restart_count, MAX_RESTARTS);
+            
+            sleep(RESTART_DELAY);
+        } 
+        else {
+            // Fork failed
+            fprintf(stderr, "[WATCHDOG] Fork failed! Retrying in 5 seconds...\n");
+            sleep(5);
+        }
     }
 
-    return 0;
+    fprintf(stderr, "[WATCHDOG] Maximum restart attempts reached. Exiting.\n");
+    return 1;
 }
