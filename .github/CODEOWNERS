@@ -1,0 +1,17 @@
+# Spiritbit CODEOWNERS - All critical files require review
+
+# Core security files - must be reviewed by owner
+/spiritbit.c          @Spiritlauncher-01
+/spiritbit.bpf.c      @Spiritlauncher-01
+/spiritbitwatchdog.c  @Spiritlauncher-01
+
+# Build & Config files
+/Makefile             @Spiritlauncher-01
+/config.h             @Spiritlauncher-01
+
+# Security critical directories
+/.github/workflows/   @Spiritlauncher-01
+/.github/             @Spiritlauncher-01
+
+# Everything else - optional review
+*                     @Spiritlauncher-01

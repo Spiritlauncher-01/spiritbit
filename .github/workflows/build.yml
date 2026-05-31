@@ -1,0 +1,51 @@
+name: Spiritbit CI Build & Security Check
+
+on:
+  push:
+    branches: [ main, master, dev ]
+  pull_request:
+    branches: [ main, master, dev ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            libbpf-dev \
+            libsqlite3-dev \
+            libcap-dev \
+            build-essential \
+            pkg-config
+
+      - name: Build Spiritbit
+        run: |
+          make clean
+          make -j2
+
+      - name: Run basic tests
+        run: |
+          echo "Basic build test passed"
+          ls -la spiritbit spiritbitwatchdog spiritbit.bpf.o
+
+      - name: Security Scan (CodeQL)
+        uses: github/codeql-action/init@v3
+        with:
+          languages: c, cpp
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+      - name: Check for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD
