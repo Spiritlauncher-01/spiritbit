@@ -23,8 +23,7 @@ spiritbit: spiritbit.c $(CC) $(CFLAGS) spiritbit.c -o spiritbit $(LDFLAGS)
 spiritbit_watchdog: spiritbit_watchdog.c $(CC) $(CFLAGS) spiritbit_watchdog.c \
         -o spiritbit_watchdog
 # Install to system paths
-install: all 
-    mkdir -p /usr/lib/spiritbit
+install: all  mkdir -p /usr/lib/spiritbit
     mkdir -p /var/lib/spiritbit
     mkdir -p /var/log
     mkdir -p /etc/spiritbit
@@ -46,8 +45,7 @@ install: all
 clean:
     rm -f spiritbit spiritbit.bpf.o spiritbit_watchdog
 # Install dependencies on Fedora
-deps-fedora:
-    sudo dnf install -y \
+deps-fedora: sudo dnf install -y \
         clang llvm \
         libbpf libbpf-devel \
         kernel-devel \
@@ -58,8 +56,7 @@ deps-fedora:
         openssl-devel \
         bpftool
 # Install dependencies on Ubuntu/Debian
-deps-ubuntu:
-    sudo apt install -y \
+deps-ubuntu: sudo apt install -y \
         clang llvm \
         libbpf-dev \
         linux-headers-$(uname -r) \
