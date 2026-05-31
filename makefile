@@ -9,8 +9,7 @@ all: spiritbit.bpf.o spiritbit spiritbit_watchdog
 # Must use clang, not gcc
 # -target bpf: compile for BPF virtual machine
 # -O2: required for eBPF verifier to accept loops
-spiritbit.bpf.o: spiritbit.bpf.c
-          $(CLANG) \
+spiritbit.bpf.o: spiritbit.bpf.c $(CLANG) \
         -target bpf \
         -D__TARGET_ARCH_x86 \
         -I/usr/include \
