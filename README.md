@@ -1,3 +1,6 @@
+
+Development for spiritbit full readme in main branch
+=======
 # Spiritbit - Lightweight eBPF Zero Trust EDR
 
 **Ultra-lightweight kernel-level security watchdog for Linux
@@ -23,6 +26,4 @@
 ## Quick Start
 
 ```bash
- make
- sudo make install
- sudo /usr/local/bin/spiritbitwatchdog &
+ make clean && make all
