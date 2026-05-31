@@ -18,14 +18,12 @@ spiritbit.bpf.o: spiritbit.bpf.c $(CLANG) \
         -c spiritbit.bpf.c \
         -o spiritbit.bpf.o
 # Compile userspace daemon
-spiritbit: spiritbit.c
-    $(CC) $(CFLAGS) spiritbit.c -o spiritbit $(LDFLAGS)
+spiritbit: spiritbit.c $(CC) $(CFLAGS) spiritbit.c -o spiritbit $(LDFLAGS)
 # Compile watchdog
-spiritbit_watchdog: spiritbit_watchdog.c
-    $(CC) $(CFLAGS) spiritbit_watchdog.c \
+spiritbit_watchdog: spiritbit_watchdog.c $(CC) $(CFLAGS) spiritbit_watchdog.c \
         -o spiritbit_watchdog
 # Install to system paths
-install: all
+install: all 
     mkdir -p /usr/lib/spiritbit
     mkdir -p /var/lib/spiritbit
     mkdir -p /var/log
