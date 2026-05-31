@@ -23,6 +23,6 @@
 ## Quick Start
 
 ```bash
-make
-sudo make install
-sudo /usr/local/bin/spiritbitwatchdog &
+ make
+ sudo make install
+ sudo /usr/local/bin/spiritbitwatchdog &
