@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0
 
 #include "vmlinux.h"
+
+// Workaround for bpf_stream_vprintk conflict with some libbpf versions
 #define bpf_stream_vprintk bpf_stream_vprintk__unused
 #include <bpf/bpf_helpers.h>
 #undef bpf_stream_vprintk
@@ -31,6 +33,8 @@
 #define EVENT_IOURING  0x0006
 #define RATE_WINDOW_NS  1000000000ULL
 #define RATE_MAX_EVENTS 1000
+#define MAX_FILENAME_LEN 256
+#define MAX_COMM_LEN 16
 
 // ============================================
 // STRUCT DEFINITIONS
@@ -42,9 +46,9 @@ struct event {
     __u32  uid;
     __u64  timestamp;
     __u64  start_time;
-    char comm[16];
-    char parent_comm[16];
-    char filename[256];
+    char comm[MAX_COMM_LEN];
+    char parent_comm[MAX_COMM_LEN];
+    char filename[MAX_FILENAME_LEN];
     __u32  flags;
     __u32  open_flags;
     int    fd;
@@ -58,7 +62,7 @@ struct pending_open {
     __u32  open_flags;
     __u8   truncated;
     __u8   valid;
-    char filename[256];
+    char filename[MAX_FILENAME_LEN];
 };
 
 struct rate_entry {
@@ -99,38 +103,109 @@ struct {
     __type(value, struct pending_open);
 } pending SEC(".maps");
 
-// SCRATCH MAPS - Fix for 512 byte stack limit
+// Scratch maps with proper typing
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(max_entries, 1);
-    __type(key, int);
-    __type(value, struct pending_open);
-} scratch_pending SEC(".maps");
+    __type(key, __u32);
+    __type(value, char[MAX_FILENAME_LEN]);
+} scratch_filename SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(max_entries, 1);
-    __type(key, int);
-    __type(value, char[256]);
-} scratch_filename SEC(".maps");
+    __type(key, __u32);
+    __type(value, struct pending_open);
+} scratch_pending SEC(".maps");
+
+// Fixed: Two buffers for rename syscall (Error 4 fix)
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 2);
+    __type(key, __u32);
+    __type(value, char[MAX_FILENAME_LEN]);
+} scratch_rename_paths SEC(".maps");
 
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
-static inline int is_sensitive_path(char *filename)
+
+// Fixed: Added length checking to prevent out-of-bounds access
+static inline int is_sensitive_path(const char *filename, int len)
 {
-    if (__builtin_memcmp(filename, "/etc/", 5) == 0) return 1;
-    if (__builtin_memcmp(filename, "/etc", 4) == 0 &&
-        (filename[4] == '/' || filename[4] == '\0')) return 1;
-    if (__builtin_memcmp(filename, "/root/", 6) == 0) return 1;
-    if (__builtin_memcmp(filename, "/root", 5) == 0 &&
-        (filename[5] == '/' || filename[5] == '\0')) return 1;
-    if (__builtin_memcmp(filename, "/proc/", 6) == 0) return 1;
-    if (__builtin_memcmp(filename, "/home/", 6) == 0) return 1;
-    if (__builtin_memcmp(filename, "/usr/bin/", 9) == 0) return 1;
-    if (__builtin_memcmp(filename, "/usr/sbin/", 10) == 0) return 1;
-    if (__builtin_memcmp(filename, "/usr/lib/", 9) == 0) return 1;
+    if (!filename || len < 4) return 0;
+    
+    if (len >= 5 && filename[0] == '/' && filename[1] == 'e' && 
+        filename[2] == 't' && filename[3] == 'c' && filename[4] == '/') 
+        return 1;
+    
+    if (len >= 4 && filename[0] == '/' && filename[1] == 'e' && 
+        filename[2] == 't' && filename[3] == 'c') {
+        if (len == 4 || filename[4] == '/' || filename[4] == '\0') 
+            return 1;
+    }
+    
+    if (len >= 6 && filename[0] == '/' && filename[1] == 'r' && 
+        filename[2] == 'o' && filename[3] == 'o' && filename[4] == 't' && filename[5] == '/') 
+        return 1;
+    
+    if (len >= 5 && filename[0] == '/' && filename[1] == 'r' && 
+        filename[2] == 'o' && filename[3] == 'o' && filename[4] == 't') {
+        if (len == 5 || filename[5] == '/' || filename[5] == '\0') 
+            return 1;
+    }
+    
+    if (len >= 6 && filename[0] == '/' && filename[1] == 'p' && 
+        filename[2] == 'r' && filename[3] == 'o' && filename[4] == 'c' && filename[5] == '/') 
+        return 1;
+    
+    if (len >= 6 && filename[0] == '/' && filename[1] == 'h' && 
+        filename[2] == 'o' && filename[3] == 'm' && filename[4] == 'e' && filename[5] == '/') 
+        return 1;
+    
+    if (len >= 9 && filename[0] == '/' && filename[1] == 'u' && 
+        filename[2] == 's' && filename[3] == 'r' && filename[4] == '/' && 
+        filename[5] == 'b' && filename[6] == 'i' && filename[7] == 'n' && filename[8] == '/') 
+        return 1;
+    
+    if (len >= 10 && filename[0] == '/' && filename[1] == 'u' && 
+        filename[2] == 's' && filename[3] == 'r' && filename[4] == '/' && 
+        filename[5] == 's' && filename[6] == 'b' && filename[7] == 'i' && 
+        filename[8] == 'n' && filename[9] == '/') 
+        return 1;
+    
+    if (len >= 9 && filename[0] == '/' && filename[1] == 'u' && 
+        filename[2] == 's' && filename[3] == 'r' && filename[4] == '/' && 
+        filename[5] == 'l' && filename[6] == 'i' && filename[7] == 'b' && filename[8] == '/') 
+        return 1;
+    
     return 0;
+}
+
+// Fixed: Integer to string conversion for ptrace (Error 3 fix)
+static inline void uint32_to_str(__u32 num, char *buf, int buf_len)
+{
+    if (!buf || buf_len < 2) return;
+    
+    if (num == 0) {
+        buf[0] = '0';
+        buf[1] = '\0';
+        return;
+    }
+    
+    char temp[12];
+    int pos = 0;
+    
+    while (num > 0 && pos < 11) {
+        temp[pos++] = '0' + (num % 10);
+        num /= 10;
+    }
+    
+    int i;
+    for (i = 0; i < pos && i < buf_len - 1; i++) {
+        buf[i] = temp[pos - 1 - i];
+    }
+    buf[i] = '\0';
 }
 
 static inline int is_flooding(__u64 key)
@@ -164,9 +239,11 @@ static inline int is_flooding(__u64 key)
     }
 }
 
+// Fixed: Added proper NULL checking for task structure
 static inline int populate_event_common(struct event *e)
 {
     if (!e) return 0;
+    
     e->valid = 0;
     e->version = SPIRITBIT_EVENT_VERSION;
 
@@ -174,18 +251,33 @@ static inline int populate_event_common(struct event *e)
     e->pid = pid_tgid >> 32;
 
     __u64 uid_gid = bpf_get_current_uid_gid();
-    e->uid = uid_gid & 0xFFFFFFFF;
+    e->uid = (__u32)uid_gid;
 
-    if (bpf_get_current_comm(&e->comm, sizeof(e->comm)) < 0) return 0;
+    if (bpf_get_current_comm(e->comm, sizeof(e->comm)) < 0) {
+        __builtin_memcpy(e->comm, "unknown", 8);
+    }
+    
     e->timestamp = bpf_ktime_get_ns();
 
+    // Safe task structure access with proper error handling
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    struct task_struct *parent = NULL;
-    
-    if (bpf_probe_read_kernel(&parent, sizeof(parent), &task->real_parent) == 0 && parent) {
-        bpf_probe_read_kernel(&e->ppid, sizeof(e->ppid), &parent->tgid);
-        bpf_probe_read_kernel_str(e->parent_comm, sizeof(e->parent_comm), parent->comm);
-        bpf_probe_read_kernel(&e->start_time, sizeof(e->start_time), &task->start_time);
+    if (task) {
+        struct task_struct *parent;
+        
+        // Safe probe of parent task
+        if (bpf_probe_read_kernel(&parent, sizeof(parent), &task->real_parent) == 0 && parent) {
+            bpf_probe_read_kernel(&e->ppid, sizeof(e->ppid), &parent->tgid);
+            bpf_probe_read_kernel_str(e->parent_comm, sizeof(e->parent_comm), parent->comm);
+            bpf_probe_read_kernel(&e->start_time, sizeof(e->start_time), &task->start_time);
+        } else {
+            e->ppid = 0;
+            __builtin_memcpy(e->parent_comm, "init", 5);
+            e->start_time = 0;
+        }
+    } else {
+        e->ppid = 0;
+        __builtin_memcpy(e->parent_comm, "unknown", 8);
+        e->start_time = 0;
     }
 
     e->valid = 1;
@@ -199,25 +291,25 @@ SEC("tracepoint/syscalls/sys_enter_openat")
 int handle_openat_entry(struct trace_event_raw_sys_enter *ctx)
 {
     __u64 key = bpf_get_current_pid_tgid();
-    int zero = 0;
+    __u32 zero = 0;
 
     char *filename = bpf_map_lookup_elem(&scratch_filename, &zero);
     if (!filename) return 0;
 
-    int bytes_read = bpf_probe_read_user_str(filename, 256, (void *)ctx->args[1]);
-    if (bytes_read <= 0) return 0;
-    if (!is_sensitive_path(filename)) return 0;
+    int bytes_read = bpf_probe_read_user_str(filename, MAX_FILENAME_LEN, (void *)ctx->args[1]);
+    if (bytes_read <= 1) return 0;
+    if (!is_sensitive_path(filename, bytes_read)) return 0;
     if (is_flooding(key)) return 0;
 
     struct pending_open *p = bpf_map_lookup_elem(&scratch_pending, &zero);
     if (!p) return 0;
 
     __builtin_memset(p, 0, sizeof(*p));
-    p->pid = key >> 32;
+    p->pid = (__u32)(key >> 32);
     p->timestamp = bpf_ktime_get_ns();
     p->open_flags = (__u32)ctx->args[2];
-    p->truncated = (bytes_read == 256) ? 1 : 0;
-    __builtin_memcpy(p->filename, filename, 256);
+    p->truncated = (bytes_read == MAX_FILENAME_LEN) ? 1 : 0;
+    __builtin_memcpy(p->filename, filename, MAX_FILENAME_LEN);
 
     bpf_map_update_elem(&pending, &key, p, BPF_ANY);
     return 0;
@@ -229,7 +321,8 @@ int handle_openat_exit(struct trace_event_raw_sys_exit *ctx)
     __u64 key = bpf_get_current_pid_tgid();
     struct pending_open *p = bpf_map_lookup_elem(&pending, &key);
     if (!p) return 0;
-    if (ctx->ret < 0) {
+    
+    if ((long)ctx->ret < 0) {
         bpf_map_delete_elem(&pending, &key);
         return 0;
     }
@@ -264,25 +357,25 @@ SEC("tracepoint/syscalls/sys_enter_open")
 int handle_open_entry(struct trace_event_raw_sys_enter *ctx)
 {
     __u64 key = bpf_get_current_pid_tgid();
-    int zero = 0;
+    __u32 zero = 0;
 
     char *filename = bpf_map_lookup_elem(&scratch_filename, &zero);
     if (!filename) return 0;
 
-    int bytes_read = bpf_probe_read_user_str(filename, 256, (void *)ctx->args[0]);
-    if (bytes_read <= 0) return 0;
-    if (!is_sensitive_path(filename)) return 0;
+    int bytes_read = bpf_probe_read_user_str(filename, MAX_FILENAME_LEN, (void *)ctx->args[0]);
+    if (bytes_read <= 1) return 0;
+    if (!is_sensitive_path(filename, bytes_read)) return 0;
     if (is_flooding(key)) return 0;
 
     struct pending_open *p = bpf_map_lookup_elem(&scratch_pending, &zero);
     if (!p) return 0;
 
     __builtin_memset(p, 0, sizeof(*p));
-    p->pid = key >> 32;
+    p->pid = (__u32)(key >> 32);
     p->timestamp = bpf_ktime_get_ns();
     p->open_flags = (__u32)ctx->args[1];
-    p->truncated = (bytes_read == 256) ? 1 : 0;
-    __builtin_memcpy(p->filename, filename, 256);
+    p->truncated = (bytes_read == MAX_FILENAME_LEN) ? 1 : 0;
+    __builtin_memcpy(p->filename, filename, MAX_FILENAME_LEN);
 
     bpf_map_update_elem(&pending, &key, p, BPF_ANY);
     return 0;
@@ -294,7 +387,8 @@ int handle_open_exit(struct trace_event_raw_sys_exit *ctx)
     __u64 key = bpf_get_current_pid_tgid();
     struct pending_open *p = bpf_map_lookup_elem(&pending, &key);
     if (!p) return 0;
-    if (ctx->ret < 0) {
+    
+    if ((long)ctx->ret < 0) {
         bpf_map_delete_elem(&pending, &key);
         return 0;
     }
@@ -331,11 +425,11 @@ int handle_execve(struct trace_event_raw_sys_enter *ctx)
     __u64 key = bpf_get_current_pid_tgid();
     if (is_flooding(key)) return 0;
 
-    int zero = 0;
+    __u32 zero = 0;
     char *filename = bpf_map_lookup_elem(&scratch_filename, &zero);
     if (!filename) return 0;
 
-    int bytes_read = bpf_probe_read_user_str(filename, 256, (void *)ctx->args[0]);
+    int bytes_read = bpf_probe_read_user_str(filename, MAX_FILENAME_LEN, (void *)ctx->args[0]);
     if (bytes_read <= 0) return 0;
 
     struct event *e = bpf_ringbuf_reserve(&events, sizeof(struct event), 0);
@@ -347,7 +441,7 @@ int handle_execve(struct trace_event_raw_sys_enter *ctx)
     }
 
     e->flags = EVENT_EXECVE;
-    e->truncated = (bytes_read == 256) ? 1 : 0;
+    e->truncated = (bytes_read == MAX_FILENAME_LEN) ? 1 : 0;
     __builtin_memcpy(e->filename, filename, sizeof(e->filename));
 
     bpf_ringbuf_submit(e, 0);
@@ -355,26 +449,27 @@ int handle_execve(struct trace_event_raw_sys_enter *ctx)
 }
 
 // ============================================
-// RENAME HOOK
+// RENAME HOOK (FIXED - Error 4)
 // ============================================
 SEC("tracepoint/syscalls/sys_enter_rename")
 int handle_rename(struct trace_event_raw_sys_enter *ctx)
 {
     __u64 key = bpf_get_current_pid_tgid();
-    int zero = 0;
+    __u32 idx_old = 0, idx_new = 1;
 
-    char *oldpath = bpf_map_lookup_elem(&scratch_filename, &zero);
+    char *oldpath = bpf_map_lookup_elem(&scratch_rename_paths, &idx_old);
     if (!oldpath) return 0;
 
-    bpf_probe_read_user_str(oldpath, 256, (void *)ctx->args[0]);
-
-    char *newpath = bpf_map_lookup_elem(&scratch_filename, &zero);
+    char *newpath = bpf_map_lookup_elem(&scratch_rename_paths, &idx_new);
     if (!newpath) return 0;
 
-    int bytes_read = bpf_probe_read_user_str(newpath, 256, (void *)ctx->args[1]);
-    if (bytes_read <= 0) return 0;
+    int old_len = bpf_probe_read_user_str(oldpath, MAX_FILENAME_LEN, (void *)ctx->args[0]);
+    int new_len = bpf_probe_read_user_str(newpath, MAX_FILENAME_LEN, (void *)ctx->args[1]);
+    
+    if (new_len <= 1 && old_len <= 1) return 0;
 
-    if (!is_sensitive_path(newpath) && !is_sensitive_path(oldpath)) return 0;
+    if (!is_sensitive_path(newpath, new_len) && !is_sensitive_path(oldpath, old_len)) 
+        return 0;
     if (is_flooding(key)) return 0;
 
     struct event *e = bpf_ringbuf_reserve(&events, sizeof(struct event), 0);
@@ -399,14 +494,14 @@ SEC("tracepoint/syscalls/sys_enter_symlink")
 int handle_symlink(struct trace_event_raw_sys_enter *ctx)
 {
     __u64 key = bpf_get_current_pid_tgid();
-    int zero = 0;
+    __u32 zero = 0;
 
     char *linkpath = bpf_map_lookup_elem(&scratch_filename, &zero);
     if (!linkpath) return 0;
 
-    int bytes_read = bpf_probe_read_user_str(linkpath, 256, (void *)ctx->args[1]);
-    if (bytes_read <= 0) return 0;
-    if (!is_sensitive_path(linkpath)) return 0;
+    int bytes_read = bpf_probe_read_user_str(linkpath, MAX_FILENAME_LEN, (void *)ctx->args[1]);
+    if (bytes_read <= 1) return 0;
+    if (!is_sensitive_path(linkpath, bytes_read)) return 0;
     if (is_flooding(key)) return 0;
 
     struct event *e = bpf_ringbuf_reserve(&events, sizeof(struct event), 0);
@@ -425,7 +520,7 @@ int handle_symlink(struct trace_event_raw_sys_enter *ctx)
 }
 
 // ============================================
-// PTRACE HOOK
+// PTRACE HOOK (FIXED - Error 3)
 // ============================================
 SEC("tracepoint/syscalls/sys_enter_ptrace")
 int handle_ptrace(struct trace_event_raw_sys_enter *ctx)
@@ -448,10 +543,7 @@ int handle_ptrace(struct trace_event_raw_sys_enter *ctx)
 
     e->flags = EVENT_PTRACE;
     __u32 target_pid = (__u32)ctx->args[1];
-    e->filename[0] = (target_pid >> 24) & 0xFF;
-    e->filename[1] = (target_pid >> 16) & 0xFF;
-    e->filename[2] = (target_pid >> 8)  & 0xFF;
-    e->filename[3] = (target_pid)       & 0xFF;
+    uint32_to_str(target_pid, e->filename, sizeof(e->filename));
 
     bpf_ringbuf_submit(e, 0);
     return 0;
