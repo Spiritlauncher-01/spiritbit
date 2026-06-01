@@ -24,24 +24,24 @@ spiritbit_watchdog: spiritbit_watchdog.c $(CC) $(CFLAGS) spiritbit_watchdog.c \
         -o spiritbit_watchdog
 # Install to system paths
 install: all  mkdir -p /usr/lib/spiritbit
-    mkdir -p /var/lib/spiritbit
-    mkdir -p /var/log
-    mkdir -p /etc/spiritbit
-    install -m 755 spiritbit /usr/bin/spiritbit
-    install -m 755 spiritbit_watchdog \
-        /usr/bin/spiritbit_watchdog
-    install -m 644 spiritbit.bpf.o $(BPF_PATH)
-    # Set ownership: root only
-    chown root:root /usr/bin/spiritbit
-    chown root:root $(BPF_PATH)
-    chmod 700 /var/lib/spiritbit
-    # Install default config if not exists
-    if [ ! -f /etc/spiritbit/config.conf ]; then \
-        install -m 644 config.conf.default \
-            /etc/spiritbit/config.conf; \
-    fi
-    @echo "Installation complete"
-    @echo "Run: sudo spiritbit"
+          mkdir -p /var/lib/spiritbit
+          mkdir -p /var/log
+          mkdir -p /etc/spiritbit
+          install -m 755 spiritbit /usr/bin/spiritbit
+          install -m 755 spiritbit_watchdog \
+          /usr/bin/spiritbit_watchdog
+          install -m 644 spiritbit.bpf.o $(BPF_PATH)
+# Set ownership: root only
+          chown root:root /usr/bin/spiritbit
+          chown root:root $(BPF_PATH)
+          chmod 700 /var/lib/spiritbit
+          # Install default config if not exists
+          if [ ! -f /etc/spiritbit/config.conf ]; then \
+          install -m 644 config.conf.default \
+          /etc/spiritbit/config.conf; \
+          fi
+          @echo "Installation complete"
+          @echo "Run: sudo spiritbit"
 clean:
     rm -f spiritbit spiritbit.bpf.o spiritbit_watchdog
 # Install dependencies on Fedora
