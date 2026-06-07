@@ -7,7 +7,7 @@ BPF_PATH = /usr/lib/spiritbit/spiritbit.bpf.o
 all: spiritbit.bpf.o spiritbit spiritbit_watchdog
 
 spiritbit.bpf.o: spiritbit.bpf.c
-          $(CLANG) -target bpf -D__TARGET_ARCH_x86 -I/usr/include -O2 -g -w -c spiritbit.bpf.c -o spiritbit.bpf.o
+	$(CLANG) -target bpf -D__TARGET_ARCH_x86 -I/usr/include -O2 -g -w -c spiritbit.bpf.c -o spiritbit.bpf.o
 
 spiritbit: spiritbit.c
 	$(CC) $(CFLAGS) spiritbit.c -o spiritbit $(LDFLAGS)
