@@ -322,7 +322,7 @@ void async_log(const char *format, ...)
 // Log rotation
 // Called from log thread only
 // Never from main thread or signal handler
-void rotate_log_if_needed()
+void rotate_log_if_needed(void)
 {
     if (!log_file) return;
 
@@ -350,6 +350,7 @@ void rotate_log_if_needed()
 // Prevents signal handler deadlock on FILE* lock
 void *log_thread_func(void *arg)
 {
+    (void)arg; // unused parameter
     while (1) {
         pthread_mutex_lock(&log_queue_mutex);
 
@@ -397,10 +398,10 @@ void *log_thread_func(void *arg)
 // Creates tables if they don't exist
 // Enables WAL mode for concurrent access
 // Fix: WAL mode prevents read/write blocking
-void init_database()
+void init_database(void)
 {
-    // Create directory
-    system("mkdir -p /var/lib/spiritbit");
+    // Create directory (ignore return value)
+    (void)system("mkdir -p /var/lib/spiritbit");
 
     if (sqlite3_open(DB_PATH, &db) != SQLITE_OK) {
         fprintf(stderr,
@@ -529,7 +530,7 @@ void persist_event_async(
 // Called at startup
 // Restores learned normal behavior across restarts
 // Fix: baseline survives Spiritbit being killed
-void load_baseline_from_db()
+void load_baseline_from_db(void)
 {
     if (!db) return;
 
@@ -636,7 +637,7 @@ void persist_baseline_entry(unsigned long long hash, int count)
 // Inodes are unique kernel assigned identifiers
 // Cannot be faked by path manipulation
 // Cannot be bypassed via /proc/self/fd tricks
-void build_inode_table()
+void build_inode_table(void)
 {
     printf("[SPIRITBIT] Building inode table\n");
 
@@ -698,7 +699,7 @@ void build_inode_table()
 // Detects filesystem changes that could invalidate inode table
 // When file deleted and recreated it gets new inode
 // Without this Spiritbit monitors old (now orphaned) inode
-void setup_inotify()
+void setup_inotify(void)
 {
     // Fix: create with O_CLOEXEC
     // Prevents fd leaking to child processes
@@ -736,7 +737,7 @@ void setup_inotify()
 // Check for filesystem changes
 // Called from main loop
 // Non-blocking: returns immediately if no events
-void check_inotify_events()
+void check_inotify_events(void)
 {
     if (inotify_fd < 0) return;
 
@@ -809,7 +810,7 @@ struct tool_inode {
 struct tool_inode tool_inodes[64];
 int tool_inode_count = 0;
 
-void build_tool_inode_table()
+void build_tool_inode_table(void)
 {
     printf("[SPIRITBIT] Building tool inode table\n");
 
@@ -842,6 +843,7 @@ int process_still_valid(
     unsigned int expected_uid
 )
 {
+    (void)expected_uid; // unused in this version, kept for API consistency
     char comm_path[64];
     snprintf(comm_path, sizeof(comm_path) - 1,
              "/proc/%u/comm", pid);
@@ -1508,7 +1510,7 @@ pid_t get_pgid(unsigned int pid)
     if (!f) return -1;
 
     pid_t pgid = -1;
-    fscanf(f, "%*d %*s %*c %*d %d", &pgid);
+    (void)fscanf(f, "%*d %*s %*c %*d %d", &pgid);
     fclose(f);
     return pgid;
 }
@@ -1524,6 +1526,7 @@ void record_freeze(
     double score
 )
 {
+    (void)uid; // not used in current audit, kept for future
     pthread_mutex_lock(&freeze_mutex);
 
     for (int i = 0; i < MAX_FREEZE_RECORDS; i++) {
@@ -1584,6 +1587,8 @@ int safe_freeze_pidfd(
     double score
 )
 {
+    (void)expected_uid;
+    (void)expected_start_time; // reserved for future start_time validation
     // Open pidfd FIRST
     // Atomically ties us to this specific process instance
     // If process dies pidfd_open fails safely
@@ -1668,7 +1673,7 @@ int safe_freeze_pidfd(
                 if (!mf) continue;
 
                 pid_t member_pgid = 0;
-                fscanf(mf, "%*d %*s %*c %*d %d", &member_pgid);
+                (void)fscanf(mf, "%*d %*s %*c %*d %d", &member_pgid);
                 fclose(mf);
 
                 if (member_pgid == pgid) group_count++;
@@ -1678,7 +1683,7 @@ int safe_freeze_pidfd(
 
         // Only freeze group if small (malware groups are small)
         if (group_count > 0 && group_count <= 20) {
-            kill(-pgid, SIGSTOP);
+            (void)kill(-pgid, SIGSTOP);
             printf(
                 "[SPIRITBIT] Process group frozen\n"
                 "  PGID  : %d\n"
@@ -1710,7 +1715,7 @@ int safe_freeze_pidfd(
 // Check for unauthorized unfreezing
 // Called periodically from main loop
 // Fix: detects attacker sending SIGCONT to frozen process
-void check_unauthorized_unfreeze()
+void check_unauthorized_unfreeze(void)
 {
     pthread_mutex_lock(&freeze_mutex);
 
@@ -1853,30 +1858,29 @@ void make_decision(struct event *e, double score)
 
 // ===== Event Handlers =====
 
-// Handle rate alert from kernel
-// Fix: userspace now knows when process is rate limited
-// Previously indistinguishable from quiet process
-static void handle_rate_alert(
+// Handle lost events on rate ring buffer (lost_cb)
+static void handle_rate_alert_lost(
     void *ctx,
     int cpu,
     __u64 lost_count
 )
 {
-    // This is the lost events callback for rate_rb
-    // Not the rate alert handler
-    // Rate alerts come through handle_rate_event
+    (void)ctx;
+    (void)cpu;
     printf(
         "[SPIRITBIT WARNING] Lost %llu rate alerts\n",
         lost_count
     );
 }
 
+// Handle rate events from kernel (sample_cb)
 static int handle_rate_event(
     void *ctx,
     void *data,
     size_t size
 )
 {
+    (void)ctx;
     if (size < sizeof(struct rate_alert)) return -1;
 
     struct rate_alert *alert = data;
@@ -1898,19 +1902,16 @@ static int handle_rate_event(
     return 0;
 }
 
-// Handle dropped events from main ring buffer
+// Handle dropped events from main ring buffer (lost_cb)
 // Fix: correct void return type to match API
-// Previously returning int caused undefined behavior
-// Stack corruption on some architectures
 static void handle_lost_events(
     void *ctx,
     int cpu,
     __u64 lost_count
 )
 {
-    // void return: matches ring_buffer_lost_fn typedef exactly
-    // Fix for wrong signature vulnerability
-
+    (void)ctx;
+    (void)cpu;
     printf(
         "\n[SPIRITBIT WARNING]\n"
         "Lost %llu events on CPU %d\n"
@@ -1951,11 +1952,10 @@ void handle_io_uring_event(struct event *e)
     );
 }
 
-// Main event handler
-// Called for every event from ring buffer
-// Scores event and makes response decision
+// Main event handler (sample_cb)
 static int handle_event(void *ctx, void *data, size_t size)
 {
+    (void)ctx;
     // Fix: validate size before casting
     // Prevents reading garbage if struct definition changed
     // Catches kernel/userspace version mismatch early
@@ -2078,7 +2078,7 @@ static int handle_event(void *ctx, void *data, size_t size)
 // Analyze persistent event history for slow attacks
 // Patterns invisible to real-time scoring
 // Fix: cross-session detection via SQLite persistence
-void analyze_persistent_patterns()
+void analyze_persistent_patterns(void)
 {
     if (!db) return;
 
@@ -2141,7 +2141,7 @@ void analyze_persistent_patterns()
 
 // Check required capabilities before doing anything
 // Fix: clean failure at startup instead of mysterious crash later
-int check_capabilities()
+int check_capabilities(void)
 {
     // Check if running as root first (simplest check)
     if (geteuid() == 0) {
@@ -2199,7 +2199,7 @@ int check_capabilities()
 // Prevent ptrace attachment to Spiritbit itself
 // Makes it harder for attacker to inspect/modify Spiritbit memory
 // Fix for tamper detection: self protection
-void prevent_ptrace_attach()
+void prevent_ptrace_attach(void)
 {
     // PR_SET_DUMPABLE = 0 prevents ptrace from unprivileged processes
     prctl(PR_SET_DUMPABLE, 0);
@@ -2212,7 +2212,7 @@ void prevent_ptrace_attach()
 // Prevent dual instantiation
 // Returns fd that must be kept open to maintain lock
 // Fix for dual instance log corruption
-int create_pid_file()
+int create_pid_file(void)
 {
     int fd = open(PID_FILE, O_RDWR | O_CREAT | O_CLOEXEC, 0640);
 
@@ -2240,8 +2240,8 @@ int create_pid_file()
     // Write our PID
     char pid_str[16];
     snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());
-    ftruncate(fd, 0);
-    write(fd, pid_str, strlen(pid_str));
+    (void)ftruncate(fd, 0);
+    (void)write(fd, pid_str, strlen(pid_str));
 
     return fd; // keep open to maintain lock
 }
@@ -2299,7 +2299,7 @@ int verify_bpf_object(const char *path)
 }
 
 // Load runtime configuration
-void load_config()
+void load_config(void)
 {
     FILE *f = fopen(CONFIG_PATH, "r");
     if (!f) {
@@ -2351,10 +2351,11 @@ void load_config()
 // Setting volatile sig_atomic_t IS safe
 void handle_signal(int signum)
 {
+    (void)signum;
     // write() is async-signal-safe
     // printf/fprintf are NOT: can deadlock on FILE* lock
     const char *msg = "\n[SPIRITBIT] Shutting down cleanly\n";
-    write(STDOUT_FILENO, msg, strlen(msg));
+    (void)write(STDOUT_FILENO, msg, strlen(msg));
 
     // sig_atomic_t write is atomic and safe
     running = 0;
@@ -2370,7 +2371,7 @@ void handle_signal(int signum)
 // Cleanup function
 // Called via atexit() automatically on any exit
 // Fix: reentrant guard prevents double execution
-void cleanup()
+void cleanup(void)
 {
     // Atomic check-and-set prevents double execution
     // If signal arrives during cleanup
@@ -2382,7 +2383,7 @@ void cleanup()
 
     // Signal log thread to drain and exit
     running = 0;
-    pthread_cond_signal(&log_queue_cond);
+    (void)pthread_cond_signal(&log_queue_cond);
 
     // Free ring buffers
     if (rb) {
@@ -2431,6 +2432,8 @@ void cleanup()
 
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     printf(
         "[SPIRITBIT] Starting v0.2.0\n"
         "[SPIRITBIT] Kernel EDR for Linux\n\n"
@@ -2452,13 +2455,13 @@ int main(int argc, char **argv)
 
     // Register signal handlers
     // Fix: only async-signal-safe operations inside handlers
-    signal(SIGINT,  handle_signal);
-    signal(SIGTERM, handle_signal);
-    signal(SIGHUP,  handle_signal);
+    (void)signal(SIGINT,  handle_signal);
+    (void)signal(SIGTERM, handle_signal);
+    (void)signal(SIGHUP,  handle_signal);
 
     // Register cleanup to run automatically on exit
     // Runs even if exit() called anywhere
-    atexit(cleanup);
+    (void)atexit(cleanup);
 
     // Load configuration
     load_config();
@@ -2484,7 +2487,7 @@ int main(int argc, char **argv)
         );
         return 1;
     }
-    pthread_detach(log_thread);
+    (void)pthread_detach(log_thread);
 
     // Initialize database
     // Persistent state across restarts
@@ -2548,11 +2551,12 @@ int main(int argc, char **argv)
     }
 
     // Create ring buffer reader for main events
+    // ring_buffer__new(map_fd, sample_cb, ctx, lost_cb)
     rb = ring_buffer__new(
         bpf_map__fd(events_map),
-        handle_event,        // called for each event
-        handle_lost_events,  // called when events dropped
-        NULL
+        handle_event,        // sample callback
+        NULL,                // context (unused)
+        handle_lost_events   // lost events callback
     );
     if (!rb) {
         fprintf(stderr,
@@ -2568,9 +2572,9 @@ int main(int argc, char **argv)
     if (rate_map) {
         rate_rb = ring_buffer__new(
             bpf_map__fd(rate_map),
-            handle_rate_event,
-            handle_rate_alert,
-            NULL
+            handle_rate_event,        // sample callback
+            NULL,                     // context
+            handle_rate_alert_lost    // lost callback
         );
     }
 
@@ -2669,12 +2673,12 @@ int main(int argc, char **argv)
             // Fix for backoff overflow at consecutive_errors >= 32
             unsigned int shift = consecutive_errors;
             if (shift > MAX_BACKOFF_SHIFT) shift = MAX_BACKOFF_SHIFT;
-            usleep(100000 * (1 << shift));
+            (void)usleep(100000 * (1 << shift));
         }
 
         // Poll rate alerts ring buffer
         if (rate_rb) {
-            ring_buffer__poll(rate_rb, 0);
+            (void)ring_buffer__poll(rate_rb, 0);
         }
 
         time_t now = time(NULL);
@@ -2728,7 +2732,7 @@ int main(int argc, char **argv)
 
     // Clean up PID file
     close(pid_fd);
-    remove(PID_FILE);
+    (void)remove(PID_FILE);
 
     return 0;
 }
